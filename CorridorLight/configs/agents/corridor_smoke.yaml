@@ -1,0 +1,42 @@
+agent_type: corridor
+
+# Quick reproduction: run only 2 episodes
+max_episodes: 2
+eval_interval: 0
+save_interval: 0
+checkpoint_interval: 0
+
+# Disable wandb (avoid extra noise)
+wandb: false
+profile_timing: false
+
+# Force debug_checks on (to help catch NaN root causes)
+debug_checks: true
+
+# Use the original core training settings (keep it easy to reproduce)
+ppo_lr: 3e-4
+ppo_gamma: 0.99
+ppo_clip_ratio: 0.15
+ppo_value_coef: 0.5
+ppo_entropy_coef: 0.01
+ppo_max_grad_norm: 0.5
+ppo_epochs: 10
+ppo_lam: 0.95
+
+disable_corridor_agent: false
+disable_gnn: false
+skip_corridor_updates: false
+
+max_corridors: 4
+max_corridor_length: 5
+seed_top_k: 5
+corridor_delta_time: 10
+
+reward_glob_mode: corridor_decayed
+reward_glob_reduce: max
+
+hidden_dim: 128
+lambda_friction_coeff: 1.0
+lambda_max_initial: 0.5
+lane_feature_dim: 10
+

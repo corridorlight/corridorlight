@@ -1,0 +1,27 @@
+agent_type: corridor
+
+# Smoke test: run only 10 episodes per map to minimize overhead
+max_episodes: 10
+eval_interval: 1000000
+save_interval: 1000000
+num_threads: 1
+num_rollouts: 1
+profile_timing: false
+device: cpu
+
+# Checkpoint / evaluation / output
+checkpoint_interval: 0
+eval_episodes: 1
+eval_save_results: false
+
+# Corridor RL specific (use defaults; adjust if needed)
+reward_fn: diff-waiting-time
+disable_corridor_agent: false
+# Smoke tests mainly check whether the map/environment can reset/step correctly. Disabling GNN will also
+# auto-disable corridor agent, which can significantly speed things up and avoid heavy torch-geometric compute.
+disable_gnn: true
+skip_corridor_updates: false
+
+# A more conservative corridor update frequency
+corridor_delta_time: 20
+

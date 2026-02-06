@@ -1,0 +1,13 @@
+# RESCO grid4x4 map config
+net_file: sumo_rl/nets/RESCO/grid4x4/grid4x4.net.xml
+route_file: sumo_rl/nets/RESCO/grid4x4/grid4x4_1.rou.xml
+reward_fn: diff-waiting-time
+reward_scale: 2.0
+gui: false
+num_seconds: 3600
+min_green: 5
+delta_time: 10
+no_libsumo: false
+log_level: INFO
+traffic_scale: 1.0
+

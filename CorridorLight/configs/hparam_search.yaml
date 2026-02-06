@@ -1,0 +1,27 @@
+delta_time:
+  - 10
+corridor_delta_time:
+  - 30
+  - 60
+max_corridors:
+  - 6
+lambda_friction_coeff:
+  - 1.0
+  - 0.5
+  - 1.5
+
+# === Newly added after method update (optional) ===
+# rewards_glob definition (defaults to corridor_decayed; extend to multiple values for grid search if needed)
+reward_glob_mode:
+  - corridor_decayed
+reward_glob_metric:
+  - diff-waiting-time
+reward_glob_decay:
+  - 0.9
+reward_glob_reduce:
+  - max
+
+# Corridor-reward aggregation (affects scale alignment with local reward; can extend to ["sum","mean","discounted_mean"])
+corridor_reward_agg:
+  - sum
+

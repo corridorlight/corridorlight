@@ -1,0 +1,13 @@
+# 4x4-Lucas map config
+net_file: sumo_rl/nets/4x4-Lucas/4x4.net.xml
+route_file: sumo_rl/nets/4x4-Lucas/4x4c1c2c1c2.rou.xml
+reward_fn: diff-waiting-time
+reward_scale: 1.0
+gui: false
+num_seconds: 8000
+min_green: 5
+delta_time: 5
+no_libsumo: false
+log_level: INFO
+traffic_scale: 1.0
+
