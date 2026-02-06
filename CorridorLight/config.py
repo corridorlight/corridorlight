@@ -47,7 +47,6 @@ class Config:
     max_corridors: int = 3
     max_corridor_length: int = 10
     seed_top_k: int = 5
-    corridor_reward_decay: float = 0.9
     corridor_delta_time: int = 30
     corridor_reward_agg: str = "sum"  # sum | mean | discounted_mean
     
@@ -247,7 +246,6 @@ class AgentConfig:
     max_corridors: int = 3
     max_corridor_length: int = 10
     seed_top_k: int = 5
-    corridor_reward_decay: float = 0.9
     corridor_delta_time: int = 20
     corridor_reward_agg: str = "sum"
     
@@ -421,7 +419,7 @@ def apply_runtime_logging_defaults(config: Config, map_name: Optional[str] = Non
     ts_hour = datetime.datetime.now().strftime("%Y%m%d_%H")
 
     # Build a name that includes key hyperparameters
-    # Key hyperparameters: reward_fn, reward_glob_metric, ppo_lr, ppo_gamma, corridor_reward_decay, etc.
+    # Key hyperparameters: reward_fn, reward_glob_metric, ppo_lr, ppo_gamma, etc.
     hparam_parts = []
     
     # Reward type (most important hyperparameter)
@@ -453,18 +451,7 @@ def apply_runtime_logging_defaults(config: Config, map_name: Optional[str] = Non
             lr_str = f"lr{ppo_lr:.4f}".replace(".", "p")
     hparam_parts.append(lr_str)
     
-    # Corridor reward decay (if corridor agent is enabled)
-    if not getattr(config, "disable_corridor_agent", False):
-        corridor_decay = getattr(config, "corridor_reward_decay", 0.9)
-        # Convert 0.9 to "d9", 0.95 to "d95", etc. (compact encoding)
-        decay_int = int(corridor_decay * 100)
-        if decay_int == 90:
-            decay_str = "d9"
-        elif decay_int == 95:
-            decay_str = "d95"
-        else:
-            decay_str = f"d{decay_int}"
-        hparam_parts.append(decay_str)
+    # Corridor reward decay was removed; do not encode it in run names.
     
     # GNN architecture (if GNN is enabled)
     if not getattr(config, "disable_gnn", False):

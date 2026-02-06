@@ -717,7 +717,8 @@ class CorridorRLTrainer:
                     print(
                         f"Eval (episode {episode + 1}): "
                         f"avg_reward={eval_metrics.get('avg_reward', 0.0):.2f}, "
-                        f"avg_travel_time={eval_metrics.get('avg_travel_time', 0.0):.2f}s"
+                        f"avg_travel_time={eval_metrics.get('avg_travel_time', 0.0):.2f}s, "
+                        f"throughput_per_hour={eval_metrics.get('throughput_per_hour', 0.0):.2f}"
                     )
             
             # Invoke training monitor callback (if set)
@@ -758,10 +759,14 @@ class CorridorRLTrainer:
             
             # Progress line (no episode length / corridor details / timing breakdown)
             if travel_time_metrics and travel_time_metrics.get('avg_travel_time', 0) > 0:
+                th_h = float(metrics.get("throughput_per_hour", 0.0))
+                th_cnt = float(metrics.get("throughput_count", 0.0))
                 print(
                     f"Episode {episode + 1}/{num_episodes}: "
                     f"avg_reward={avg_reward:.2f}, "
-                    f"avg_travel_time={travel_time_metrics.get('avg_travel_time', 0):.2f}s"
+                    f"avg_travel_time={travel_time_metrics.get('avg_travel_time', 0):.2f}s, "
+                    f"throughput_count={th_cnt:.0f}, "
+                    f"throughput_per_hour={th_h:.2f}"
                 )
             else:
                 print(f"Episode {episode + 1}/{num_episodes}: avg_reward={avg_reward:.2f}")
@@ -825,13 +830,9 @@ class CorridorRLTrainer:
         
         # reward_glob setting:
         # - local is the per-intersection aggregated reward (env per-agent reward)
-        # - global is the (optional) per-lane decayed reward along corridors
+        # - global is the (optional) cooperative reward stream (paper-aligned: shaping)
         reward_glob_mode = str(self.config.get("reward_glob_mode", "shaping")).lower()
-        # Always keep consistent with reward_fn (avoid wrong global-signal direction)
         reward_fn = str(self.config.get("reward_fn", "diff-waiting-time")).lower()
-        reward_glob_metric = reward_fn
-        reward_glob_decay = float(self.config.get("reward_glob_decay", self.config.get("corridor_reward_decay", 0.9)))
-        reward_glob_reduce = str(self.config.get("reward_glob_reduce", "max")).lower()  # max | sum | mean
         # Treat same_as_loc as "do not use corridor at runtime" to avoid corridor sampling consuming RNG
         # and changing behavior.
         use_corridor_runtime = (not self.disable_corridor_agent) and (not self.disable_gnn) and (reward_glob_mode != "same_as_loc")
@@ -978,69 +979,6 @@ class CorridorRLTrainer:
             if den <= 0.0:
                 return 0.0
             return float(num / den)
-
-        def _compute_corridor_reward_total(
-            lane_feat_by_lane: Dict[str, Any],
-            corridor_obj: Any,
-            target_junction_id: Optional[str] = None,
-            ts_lanes: Optional[List[str]] = None
-        ) -> float:
-            """Compute the reward for a single corridor.
-
-            - Do not use preference (preference is only used to distribute the total corridor reward to the lower level)
-            - Do not apply corridor position decay (weight decay)
-            - If target_junction_id is None: return the total reward for the entire corridor
-            - If target_junction_id is not None: return the average reward over the matched segment at that junction
-              (for diagnostics/compatibility)
-            """
-            if self.graph_builder is None:
-                return 0.0
-            try:
-                direction_nodes = list(getattr(corridor_obj, "direction_nodes", []))
-            except Exception:
-                direction_nodes = []
-            if not direction_nodes:
-                return 0.0
-            matched_nodes = 0
-
-            total = 0.0
-            gamma = 1.0
-            for idx, node in enumerate(direction_nodes):
-                if target_junction_id is not None:
-                    try:
-                        node_junction = self.graph_builder.direction_to_junction.get(node)
-                    except Exception:
-                        node_junction = None
-                    if node_junction != target_junction_id:
-                        continue
-                    matched_nodes += 1
-                lane_ids = []
-                try:
-                    lane_ids = list(self.graph_builder.direction_to_lanes.get(node, []))
-                except Exception:
-                    lane_ids = []
-                if ts_lanes:
-                    lane_ids = [lid for lid in lane_ids if lid in ts_lanes]
-                if not lane_ids:
-                    continue
-                lane_rewards = []
-                for lane_id in lane_ids:
-                    feat = lane_feat_by_lane.get(lane_id)
-                    if feat is None:
-                        continue
-                    # Use the same lane-level metric as runtime (diff-waiting-time needs lane_id for diff)
-                    lane_rewards.append(_lane_metric(feat, reward_glob_metric, lane_id))
-                if not lane_rewards:
-                    continue
-                # Within a direction node, sum across lanes (do not use preference).
-                # This matches the paper definition: r_mov(v)=sum_{lane in L(v)} Reduce_t r_lane(lane,t).
-                step_r = float(np.sum(lane_rewards))
-                total += (gamma ** idx) * step_r
-            if target_junction_id is None:
-                # Entire corridor: return total reward (no averaging/normalization)
-                return float(total)
-            # Junction segment: return average over matched nodes (avoid scale differences due to segment length)
-            return float(total) / float(max(1, matched_nodes))
         
         while self.env.agents:
             step_count += 1
@@ -1206,34 +1144,9 @@ class CorridorRLTrainer:
                 except Exception:
                     pass
             
-            lane_feat_by_lane: Optional[Dict[str, Any]] = None
-            if (not self.disable_corridor_agent) and reward_glob_mode == "corridor_decayed" and self.current_corridors:
-                lane_feat_by_lane = {}
-                for aid in self.agent_ids:
-                    lf = buffers.get(aid, {}).get('lane_features', [])
-                    if lf:
-                        for lane_id, feat in (lf[-1] or {}).items():
-                            lane_feat_by_lane[lane_id] = feat
-                if reward_glob_metric in {"diff-waiting-time", "waiting-time-reduction"}:
-                    lane_diff_by_lane = {}
-                    for lane_id, feat in lane_feat_by_lane.items():
-                        try:
-                            feat_t = feat if isinstance(feat, torch.Tensor) else torch.tensor(feat, dtype=torch.float32)
-                            wait = float(feat_t[2].item()) if feat_t.numel() > 2 else 0.0
-                            last = float(self._last_lane_waiting_time.get(lane_id, wait))
-                            if reward_glob_metric == "waiting-time-reduction":
-                                val = max(float(last - wait), 0.0)
-                            else:
-                                val = float(last - wait)
-                            self._last_lane_waiting_time[lane_id] = wait
-                            lane_diff_by_lane[str(lane_id)] = float(val) * reward_scale
-                        except Exception:
-                            continue
-
             for agent_id in self.agent_ids:
                 if agent_id in rewards:
                     reward = float(rewards[agent_id])
-                    reward_is_per_lane_avg = False
                     if reward_fn == "queue":
                         try:
                             lf = buffers.get(agent_id, {}).get('lane_features', [])
@@ -1246,102 +1159,14 @@ class CorridorRLTrainer:
                                         q_vals.append(float(feat_t[1].item()))
                                 if q_vals:
                                     reward = -float(np.sum(q_vals)) * reward_scale
-                                    reward_is_per_lane_avg = True
                         except Exception:
-                            reward_is_per_lane_avg = False
+                            pass
 
                     buffers[agent_id]['rewards'].append(reward)
                     episode_rewards[agent_id] += reward
                     reward_glob = reward
                     try:
-                        if (not self.disable_corridor_agent) and reward_glob_mode == "corridor_decayed" and self.current_corridors:
-                            if lane_feat_by_lane is None:
-                                lane_feat_by_lane = {}
-                                for aid in self.agent_ids:
-                                    lf = buffers.get(aid, {}).get('lane_features', [])
-                                    if lf:
-                                        for lane_id, feat in (lf[-1] or {}).items():
-                                            lane_feat_by_lane[lane_id] = feat
-
-                            base_env = self._get_base_env()
-                            ts = base_env.traffic_signals.get(agent_id) if hasattr(base_env, "traffic_signals") else None
-                            junction_id = ts.id if ts else None
-                            ts_lanes = list(getattr(ts, "lanes", []) or []) if ts else None
-
-                            corridor_totals = []
-                            for c in self.current_corridors:
-                                try:
-                                    jset = getattr(c, "junctions", set())
-                                except Exception:
-                                    jset = set()
-                                if junction_id is not None and jset and (junction_id not in jset):
-                                    continue
-                                corridor_total = _compute_corridor_reward_total(
-                                    lane_feat_by_lane, c, target_junction_id=None, ts_lanes=None
-                                )
-                                share_num = 0.0
-                                share_den = 0.0
-                                try:
-                                    pref_map = dict(getattr(c, "preference_values", {}) or {})
-                                except Exception:
-                                    pref_map = {}
-                                try:
-                                    direction_nodes = list(getattr(c, "direction_nodes", []) or [])
-                                except Exception:
-                                    direction_nodes = []
-                                corridor_lane_ids: set = set()
-                                junction_lane_ids: set = set()
-                                for node in direction_nodes:
-                                    try:
-                                        lids = list(self.graph_builder.direction_to_lanes.get(node, []) or [])
-                                    except Exception:
-                                        lids = []
-                                    for lid in lids:
-                                        corridor_lane_ids.add(str(lid))
-                                if junction_id is not None and ts_lanes:
-                                    for lid in ts_lanes:
-                                        if str(lid) in corridor_lane_ids:
-                                            junction_lane_ids.add(str(lid))
-                                for lid in corridor_lane_ids:
-                                    try:
-                                        w = float(pref_map.get(lid, 0.0))
-                                    except Exception:
-                                        w = 0.0
-                                    if w < 0.0:
-                                        w = 0.0
-                                    share_den += w
-                                for lid in junction_lane_ids:
-                                    try:
-                                        w = float(pref_map.get(lid, 0.0))
-                                    except Exception:
-                                        w = 0.0
-                                    if w < 0.0:
-                                        w = 0.0
-                                    share_num += w
-                                if share_den <= 0.0:
-                                    try:
-                                        jset2 = set(getattr(c, "junctions", set()) or set())
-                                    except Exception:
-                                        jset2 = set()
-                                    if junction_id is not None and junction_id in jset2 and len(jset2) > 0:
-                                        share = 1.0 / float(len(jset2))
-                                    else:
-                                        share = 0.0
-                                else:
-                                    share = float(share_num) / float(share_den)
-
-                                corridor_totals.append(float(corridor_total) * float(share))
-
-                            if corridor_totals:
-                                if reward_glob_reduce == "sum":
-                                    reward_glob = float(np.sum(corridor_totals))
-                                elif reward_glob_reduce == "mean":
-                                    reward_glob = float(np.mean(corridor_totals))
-                                else:  # "max"
-                                    reward_glob = float(np.max(corridor_totals))
-                            else:
-                                reward_glob = 0.0
-                        elif (not self.disable_corridor_agent) and reward_glob_mode == "shaping" and corridor_global_reward_coef != 0.0:
+                        if (not self.disable_corridor_agent) and reward_glob_mode == "shaping" and corridor_global_reward_coef != 0.0:
                             lane_feat = buffers[agent_id]['lane_features'][-1] if buffers[agent_id]['lane_features'] else {}
                             bonus = _corridor_global_bonus(agent_id, lane_feat)
                             reward_glob = reward + corridor_global_reward_coef * bonus
@@ -2353,8 +2178,33 @@ class CorridorRLTrainer:
         self._episode_reward_logs = []
 
     def _append_corridor_log(self, update_step: int):
-        """(Disabled) Corridor detail logging is intentionally omitted."""
-        return
+        """Log minimal corridor stats per corridor-update step.
+
+        We intentionally keep this lightweight (scalars only) to avoid large logs:
+        - corridor_count
+        - corridor_length_sum (sum of lengths across corridors)
+        """
+        try:
+            corridors = list(getattr(self, "current_corridors", []) or [])
+        except Exception:
+            corridors = []
+
+        corridor_count = int(len(corridors))
+        length_sum = 0.0
+        if corridors:
+            for c in corridors:
+                try:
+                    dn = list(getattr(c, "direction_nodes", []) or [])
+                except Exception:
+                    dn = []
+                # Length definition: number of direction nodes in the corridor (consistent with existing logs).
+                length_sum += float(len(dn))
+
+        self._episode_corridor_logs.append({
+            "step": int(update_step),
+            "corridor_count": float(corridor_count),
+            "corridor_length_sum": float(length_sum),
+        })
 
     def _append_lambda_log(
         self,
@@ -2452,6 +2302,27 @@ class CorridorRLTrainer:
                 aid: float(np.mean(vals["glob"])) if vals["glob"] else 0.0
                 for aid, vals in by_agent.items()
             }
+
+        # Corridor stats per update
+        if self._episode_corridor_logs:
+            counts = []
+            length_sum_total = 0.0
+            count_total = 0.0
+            for entry in self._episode_corridor_logs:
+                try:
+                    c = float(entry.get("corridor_count", 0.0))
+                except Exception:
+                    c = 0.0
+                try:
+                    ls = float(entry.get("corridor_length_sum", 0.0))
+                except Exception:
+                    ls = 0.0
+                counts.append(c)
+                length_sum_total += ls
+                count_total += c
+
+            metrics["corridor_count_mean"] = float(np.mean(counts)) if counts else 0.0
+            metrics["corridor_length_mean"] = float(length_sum_total / count_total) if count_total > 0 else 0.0
 
         return metrics
 
@@ -2732,6 +2603,12 @@ class CorridorRLTrainer:
                 for key in lambda_keys:
                     if key in metrics:
                         wandb_metrics[add_prefix(key)] = metrics[key]
+
+                # Corridor stats
+                corridor_keys = ['corridor_count_mean', 'corridor_length_mean']
+                for key in corridor_keys:
+                    if key in metrics:
+                        wandb_metrics[add_prefix(key)] = metrics[key]
                 
                 # Evaluation metrics (if any)
                 eval_keys = ['std_reward', 'min_reward', 'max_reward']
@@ -2910,6 +2787,8 @@ class CorridorRLTrainer:
         eval_total_rewards = []
         eval_lengths = []
         eval_travel_times = []
+        eval_throughput_counts = []
+        eval_throughput_per_hour = []
         
         # Switch to evaluation mode (avoid training-time stochasticity)
         for agent_id, agent in self.intersection_agents.items():
@@ -2969,6 +2848,15 @@ class CorridorRLTrainer:
             travel_time_metrics = self._parse_tripinfo_avg_travel_time(episode)
             if travel_time_metrics and 'avg_travel_time' in travel_time_metrics:
                 eval_travel_times.append(travel_time_metrics['avg_travel_time'])
+            try:
+                trip_count = float(travel_time_metrics.get("tripinfo_count", 0.0)) if travel_time_metrics else 0.0
+                if trip_count > 0:
+                    eval_throughput_counts.append(trip_count)
+                    sim_seconds = float(ep_len) * float(getattr(self, "delta_time", 1.0))
+                    if sim_seconds > 0:
+                        eval_throughput_per_hour.append(trip_count / (sim_seconds / 3600.0))
+            except Exception:
+                pass
         
         # Restore training mode
         for agent_id, agent in self.intersection_agents.items():
@@ -2990,6 +2878,11 @@ class CorridorRLTrainer:
             eval_metrics['std_travel_time'] = float(np.std(eval_travel_times))
             eval_metrics['min_travel_time'] = float(np.min(eval_travel_times))
             eval_metrics['max_travel_time'] = float(np.max(eval_travel_times))
+
+        if eval_throughput_counts:
+            eval_metrics["throughput_count"] = float(np.mean(eval_throughput_counts))
+        if eval_throughput_per_hour:
+            eval_metrics["throughput_per_hour"] = float(np.mean(eval_throughput_per_hour))
         
         return eval_metrics
     

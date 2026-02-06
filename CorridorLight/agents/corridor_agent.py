@@ -44,7 +44,6 @@ class CorridorAgent:
         self.max_corridors = config.get("max_corridors", 3)
         self.max_corridor_length = config.get("max_corridor_length", 10)
         self.seed_top_k = config.get("seed_top_k", 5)
-        self.corridor_reward_decay = config.get("corridor_reward_decay", 0.9)
         
         self.direction_graph = None
         self.node_to_junction = {}  # direction node id -> junction id
@@ -382,8 +381,8 @@ class CorridorAgent:
     def _compute_seed_value(self, corridor_nodes: List[int]) -> float:
         """
         Compute seed value (corridor reward).
-        
-        R_corridor = sum(γ_d^(i-1) * r_pressure(v_i))
+
+        NOTE: this value is used only for logging/diagnostics (not for planning or training targets).
         """
         if self.direction_graph is None or getattr(self.direction_graph, "x", None) is None:
             return 0.0
@@ -393,13 +392,12 @@ class CorridorAgent:
         
         pressures = self.direction_graph.x
         seed_value = 0.0
-        gamma = float(self.corridor_reward_decay)
         
         for i, node_idx in enumerate(corridor_nodes):
             if node_idx >= pressures.shape[0]:
                 continue
             r_pressure = float(pressures[node_idx][0].item())
-            seed_value += (gamma ** i) * r_pressure
+            seed_value += r_pressure
         
         return seed_value
 

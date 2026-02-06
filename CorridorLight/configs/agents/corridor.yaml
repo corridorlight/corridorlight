@@ -1,6 +1,6 @@
 agent_type: corridor
 # Training parameters
-max_episodes: 400
+max_episodes: 1000
 save_interval: 99
 num_threads: 4
 num_rollouts: 1
@@ -25,7 +25,6 @@ disable_gnn: false  # Set true to disable GNN; this will auto-disable Corridor A
 max_corridors: 6
 max_corridor_length: 5
 seed_top_k: 5
-corridor_reward_decay: 0.9
 corridor_delta_time: 10
 
 
