@@ -41,7 +41,7 @@ python3 main_corridor.py \
 4) Select device and enable W&B:
 
 ```bash
-python main_corridor.py --mode corridor --map arterial4x4 --device cuda:0 --wandb
+python3 main_corridor.py --mode corridor --map arterial4x4 --device cuda:0 --wandb
 ```
 
 ## Configuration
