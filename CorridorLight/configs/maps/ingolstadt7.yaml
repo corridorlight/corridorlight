@@ -1,0 +1,13 @@
+# RESCO ingolstadt7 map config
+net_file: sumo_rl/nets/RESCO/ingolstadt7/ingolstadt7.net.xml
+route_file: sumo_rl/nets/RESCO/ingolstadt7/ingolstadt7.rou.xml
+reward_fn: queue
+reward_scale: 1.0
+gui: false
+num_seconds: 3600
+min_green: 5
+delta_time: 10
+no_libsumo: false
+log_level: INFO
+traffic_scale: 1.0
+
